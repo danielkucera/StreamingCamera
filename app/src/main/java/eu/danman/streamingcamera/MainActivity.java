@@ -18,9 +18,11 @@ import android.widget.FrameLayout;
 import android.widget.ToggleButton;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
@@ -38,6 +40,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private SurfaceHolder mHolder;
     private View mToggleButton;
     private boolean mInitSuccesful;
+    private boolean streamRunning;
 
     SenderThread sender;
 
@@ -54,6 +57,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         mHolder.addCallback(this);
         mHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
 
+
         mToggleButton = (ToggleButton) findViewById(R.id.toggleRecordingButton);
         mToggleButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -62,31 +66,25 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
                 //sender.send("jedendvatristyripatsest".getBytes());
 
+                if (!streamRunning) {
+                    sender = new SenderThread("10.0.0.248", 1919);
+                    sender.start();
 
-                if (((ToggleButton) v).isChecked()) {
-                    mMediaRecorder.start();
-                    try {
-                        Thread.sleep(10 * 1000);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                    //finish();
-                } else {
-                    mMediaRecorder.stop();
-                    mMediaRecorder.reset();
                     try {
                         initRecorder(mHolder.getSurface());
                     } catch (IOException e) {
                         e.printStackTrace();
                     }
+
+                    mMediaRecorder.start();
+                    streamRunning = true;
+                } else {
+                    shutdown();
+                    streamRunning = false;
                 }
 
             }
         });
-
-        sender = new SenderThread("192.168.69.160", 1919);
-        sender.start();
-
 
     }
 
@@ -100,21 +98,22 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             mCamera.unlock();
         }
 
-        if (mMediaRecorder == null) mMediaRecorder = new MediaRecorder();
+        mMediaRecorder = new MediaRecorder();
         mMediaRecorder.setPreviewDisplay(surface);
         mMediaRecorder.setCamera(mCamera);
 
         mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.DEFAULT);
-        //       mMediaRecorder.setOutputFormat(8);
         mMediaRecorder.setOutputFormat(8);
+        //mMediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
         mMediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
-        mMediaRecorder.setVideoEncodingBitRate(512 * 1000);
-        mMediaRecorder.setVideoFrameRate(30);
+        mMediaRecorder.setVideoEncodingBitRate(500 * 1000);
+        mMediaRecorder.setVideoFrameRate(25);
         mMediaRecorder.setVideoSize(640, 480);
 
-        ParcelFileDescriptor pfd = ParcelFileDescriptor.fromDatagramSocket(sender.getSocket());
+        ParcelFileDescriptor pfd = ParcelFileDescriptor.fromSocket(sender.getSocket());
 
         mMediaRecorder.setOutputFile(pfd.getFileDescriptor());
+//        mMediaRecorder.setOutputFile(pfd.getFileDescriptor());
 //        mMediaRecorder.setOutputFile(VIDEO_PATH_NAME);
 
         try {
@@ -134,7 +133,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
         private InetAddress server;
 
-        private DatagramSocket socket;
+        private Socket socket;
 
         private boolean stopped = false;
 
@@ -150,20 +149,15 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             this.stopped = true;
         }
 
-        public void send(byte[] data){
-
+        public void disconnect() {
             try {
-                DatagramPacket output = new DatagramPacket(data, data.length, server, port);
-                socket.send(output);
-                Thread.yield();
+                this.socket.close();
+            } catch (IOException e) {
+                e.printStackTrace();
             }
-            catch (IOException ex) {
-                System.err.println(ex);
-            }
-
         }
 
-        public DatagramSocket getSocket() {
+        public Socket getSocket() {
             return this.socket;
         }
 
@@ -173,12 +167,21 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             } catch (UnknownHostException e) {
                 e.printStackTrace();
             }
+
             try {
-                this.socket = new DatagramSocket();
+                this.socket = new Socket(server, port);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+
+            try {
+                this.socket.setSendBufferSize(655535);
             } catch (SocketException e) {
                 e.printStackTrace();
             }
-            this.socket.connect(server, port);
+
+//            this.socket.connect();
 
 
         }
@@ -186,17 +189,22 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
+        /*
         try {
             if (!mInitSuccesful)
                 initRecorder(mHolder.getSurface());
         } catch (IOException e) {
             e.printStackTrace();
         }
+        */
     }
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
-        shutdown();
+        if (streamRunning){
+            shutdown();
+            streamRunning = false;
+        }
     }
 
     @Override
@@ -209,6 +217,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         mMediaRecorder.reset();
         mMediaRecorder.release();
         mCamera.release();
+
+        sender.disconnect();
 
         // once the objects have been released they can't be reused
         mMediaRecorder = null;
